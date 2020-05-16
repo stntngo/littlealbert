@@ -7,13 +7,16 @@ import "context"
 type Result int
 
 const (
-	// Invalid is an invalid
+	// Invalid is an invalid Result status. It should never be returned.
 	Invalid Result = iota
-	// Running ...
+	// Running is returned by a Node to indicate that its subtree is currently
+	// executing one or more Tasks.
 	Running
-	// Success ...
+	// Success is returned by a Node to indicate that its subtree has
+	// completed its tasks successfully.
 	Success
-	// Failure ...
+	// Failure is returned by a Node to indicate that its subtree has
+	// failed to complete its tasks successfully.
 	Failure
 )
 
