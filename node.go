@@ -55,13 +55,17 @@ func (t Task) Tick(ctx context.Context) Result {
 // returns a non-Success Result, then returning that Result.
 // A Sequence node will only return a Success Result
 // if and only if all of its Children return Succes Results.
-type Sequence struct {
+func Sequence(children ...Node) Node {
+	return &sequence{
+		children: children,
+	}
+}
+
+type sequence struct {
 	children []Node
 }
 
-// Tick executes the Behavior Tree tick process on the Sequence
-// of child Nodes.
-func (s Sequence) Tick(ctx context.Context) Result {
+func (s sequence) Tick(ctx context.Context) Result {
 	for _, node := range s.children {
 		if result := node.Tick(ctx); result != Success {
 			return result
@@ -76,12 +80,17 @@ func (s Sequence) Tick(ctx context.Context) Result {
 // or Running Result. A Fallback Node succeeds so long as any single
 // child Node succeeds and a Fallback Node fails if and only if all
 // of its children Nodes fail.
-type Fallback struct {
+func Fallback(children ...Node) Node {
+	return &fallback{
+		children: children,
+	}
+}
+
+type fallback struct {
 	children []Node
 }
 
-// Tick executes the Behavior Tree tick process on the Fallback child nodes.
-func (f Fallback) Tick(ctx context.Context) Result {
+func (f fallback) Tick(ctx context.Context) Result {
 	for _, node := range f.children {
 		if result := node.Tick(ctx); result == Success || result == Running {
 			return result
@@ -93,14 +102,19 @@ func (f Fallback) Tick(ctx context.Context) Result {
 
 // Decorator Nodes are control flow nodes that manipulate the Result returned
 // by their single child Node.
-type Decorator struct {
+func Decorator(child Node, modifier func(context.Context, Result) Result) Node {
+	return &decorator{
+		child: child,
+		fn:    modifier,
+	}
+}
+
+type decorator struct {
 	child Node
 	fn    func(context.Context, Result) Result
 }
 
-// Tick executes the Behavior Tree tick process on the Decroator node, passing
-// the Tick result of its child into the manipulation function defined by fn.
-func (d Decorator) Tick(ctx context.Context) Result {
+func (d decorator) Tick(ctx context.Context) Result {
 	return d.fn(ctx, d.child.Tick(ctx))
 
 }
@@ -111,13 +125,19 @@ func (d Decorator) Tick(ctx context.Context) Result {
 // or exceeds the Threshold value set in thresh. Conversely, the Parallel node
 // returns Failure should the number of Failure results returned by children
 // Nodes exceeds len(children) - thresh.
-type Parallel struct {
+func Parallel(threshold int, children ...Node) Node {
+	return &parallel{
+		children: children,
+		thresh:   threshold,
+	}
+}
+
+type parallel struct {
 	children []Node
 	thresh   int
 }
 
-// Tick executes the Behavior Tree tick on all children nodes.
-func (p Parallel) Tick(ctx context.Context) Result {
+func (p parallel) Tick(ctx context.Context) Result {
 	var successes, failures int
 	for _, node := range p.children {
 		switch result := node.Tick(ctx); result {
