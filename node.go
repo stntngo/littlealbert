@@ -1,6 +1,9 @@
 package littlealbert
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Result represents the result of a Node's execution
 // within the context of a Behavior Tree.
@@ -157,4 +160,28 @@ func (p parallel) Tick(ctx context.Context) Result {
 	}
 
 	return Running
+}
+
+// Run executes the provided Behavior Tree at the provided Tick Rate with
+// the specified per-Tick timeout and provided parent context until a non-Running
+// Result is returned.
+func Run(ctx context.Context, tree Node, tickRate, tickTimeout time.Duration) Result {
+	for {
+		tickCtx, cancel := context.WithTimeout(ctx, tickRate)
+
+		result := tree.Tick(tickCtx)
+
+		cancel()
+
+		if result != Running {
+			return result
+		}
+
+		select {
+		case <-ctx.Done():
+			return Failure
+		case <-time.Tick(tickRate):
+			continue
+		}
+	}
 }
