@@ -2,10 +2,11 @@ package littlealbert
 
 import "context"
 
-// RunUntilTrue will run the underlying child Node until it returns
+// RunUntilSuccess will run the underlying child Node until it returns
 // a Successful Result effectively ignoring any Failures..
-func RunUntilTrue(child Node) Node {
+func RunUntilSuccess(child Node) Node {
 	return Decorator(
+		"Run until successful",
 		child,
 		func(_ context.Context, result Result) Result {
 			if result == Success {
@@ -21,6 +22,7 @@ func RunUntilTrue(child Node) Node {
 // a Failure Result effectively ignoring any Successes.
 func RunUntilFailure(child Node) Node {
 	return Decorator(
+		"Run until failure",
 		child,
 		func(_ context.Context, status Result) Result {
 			if status == Failure {
@@ -35,6 +37,7 @@ func RunUntilFailure(child Node) Node {
 // Invert inverts the Result returned by the child Node.
 func Invert(child Node) Node {
 	return Decorator(
+		"Invert result",
 		child,
 		func(_ context.Context, result Result) Result {
 			switch result {
@@ -61,3 +64,8 @@ func Ternary(predicate, whenTrue, whenFalse Node) Node {
 		whenFalse,
 	)
 }
+
+// Noop is a dummy task that always returns a Success result.
+var Noop = Task("Success Noop", func(_ context.Context) Result {
+	return Success
+})

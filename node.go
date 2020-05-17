@@ -29,14 +29,43 @@ type Node interface {
 	Tick(context.Context) Result
 }
 
+// NamedNode extends the minimum Node interface to allow
+// naming nodes and subtrees.
+type NamedNode interface {
+	Node
+
+	Name() string
+}
+
+// ParentNode extends the minimum Node interface to allow
+// nodes containing children to provide exported access
+// to their children.
+type ParentNode interface {
+	Node
+
+	Children() []Node
+}
+
 // Conditional is any function which, given a context, returns
 // a boolean value.
-type Conditional func(context.Context) bool
+func Conditional(name string, cond func(context.Context) bool) Node {
+	return &conditional{
+		name: name,
+		cond: cond,
+	}
+}
 
-// Tick turns the conditional boolean into a valid Behavior
-// Tree Node.
-func (c Conditional) Tick(ctx context.Context) Result {
-	if c(ctx) {
+type conditional struct {
+	name string
+	cond func(context.Context) bool
+}
+
+func (c conditional) Name() string {
+	return c.name
+}
+
+func (c conditional) Tick(ctx context.Context) Result {
+	if c.cond(ctx) {
 		return Success
 	}
 
@@ -45,12 +74,26 @@ func (c Conditional) Tick(ctx context.Context) Result {
 
 // Task is any childless function which, given a context,
 // returns a Behavior Tree Result.
-type Task func(context.Context) Result
+func Task(name string, t func(context.Context) Result) Node {
+	return &task{
+		name: name,
+		t:    t,
+	}
+}
+
+type task struct {
+	name string
+	t    func(context.Context) Result
+}
+
+func (t task) Name() string {
+	return t.name
+}
 
 // Tick turns the childless Task function into a valid
 // Behavior Tree Node.
-func (t Task) Tick(ctx context.Context) Result {
-	return t(ctx)
+func (t task) Tick(ctx context.Context) Result {
+	return t.t(ctx)
 }
 
 // Sequence nodes route their execution ticks to their
@@ -66,6 +109,10 @@ func Sequence(children ...Node) Node {
 
 type sequence struct {
 	children []Node
+}
+
+func (s sequence) Children() []Node {
+	return s.children
 }
 
 func (s sequence) Tick(ctx context.Context) Result {
@@ -93,6 +140,10 @@ type fallback struct {
 	children []Node
 }
 
+func (f fallback) Children() []Node {
+	return f.children
+}
+
 func (f fallback) Tick(ctx context.Context) Result {
 	for _, node := range f.children {
 		if result := node.Tick(ctx); result == Success || result == Running {
@@ -105,21 +156,35 @@ func (f fallback) Tick(ctx context.Context) Result {
 
 // Decorator Nodes are control flow nodes that manipulate the Result returned
 // by their single child Node.
-func Decorator(child Node, modifier func(context.Context, Result) Result) Node {
+func Decorator(name string, child Node, modifier func(context.Context, Result) Result) Node {
 	return &decorator{
+		name:  name,
 		child: child,
 		fn:    modifier,
 	}
 }
 
 type decorator struct {
+	name  string
 	child Node
 	fn    func(context.Context, Result) Result
 }
 
-func (d decorator) Tick(ctx context.Context) Result {
-	return d.fn(ctx, d.child.Tick(ctx))
+func (d decorator) Name() string {
+	return d.name
+}
 
+func (d decorator) Children() []Node {
+	return []Node{d.child}
+}
+
+func (d decorator) Tick(ctx context.Context) Result {
+	result := d.child.Tick(ctx)
+	if d.fn != nil {
+		return d.fn(ctx, result)
+	}
+
+	return result
 }
 
 // Parallel nodes route their execution tick to all children nodes every time
@@ -138,6 +203,10 @@ func Parallel(threshold int, children ...Node) Node {
 type parallel struct {
 	children []Node
 	thresh   int
+}
+
+func (p parallel) Children() []Node {
+	return p.children
 }
 
 func (p parallel) Tick(ctx context.Context) Result {
@@ -160,6 +229,33 @@ func (p parallel) Tick(ctx context.Context) Result {
 	}
 
 	return Running
+}
+
+// Dynamic nodes are nodes whose children cannot be defined at compile time.
+// The subtree defined by the Dynamic node is constructed at runtime when
+// the cons function is called.
+func Dynamic(name string, cons func(context.Context) Node) Node {
+	return &dynamic{
+		name: name,
+		cons: cons,
+	}
+}
+
+type dynamic struct {
+	name string
+	cons func(context.Context) Node
+}
+
+func (d dynamic) Name() string {
+	return d.name
+}
+
+func (d dynamic) Children() []Node {
+	return []Node{d.cons(context.Background())}
+}
+
+func (d dynamic) Tick(ctx context.Context) Result {
+	return d.cons(ctx).Tick(ctx)
 }
 
 // Run executes the provided Behavior Tree at the provided Tick Rate with
