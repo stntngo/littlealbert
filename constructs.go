@@ -2,6 +2,16 @@ package littlealbert
 
 import "context"
 
+// Noop is a dummy task that always returns a Success result.
+var Noop = Task("Success Noop", func(_ context.Context) Result {
+	return Success
+})
+
+// Label decorates a provided Node with provided Name.
+func Label(name string, node Node) Node {
+	return Decorator(name, node, nil)
+}
+
 // RunUntilSuccess will run the underlying child Node until it returns
 // a Successful Result effectively ignoring any Failures..
 func RunUntilSuccess(child Node) Node {
@@ -64,8 +74,3 @@ func Ternary(predicate, whenTrue, whenFalse Node) Node {
 		whenFalse,
 	)
 }
-
-// Noop is a dummy task that always returns a Success result.
-var Noop = Task("Success Noop", func(_ context.Context) Result {
-	return Success
-})

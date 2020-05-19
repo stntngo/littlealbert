@@ -29,7 +29,12 @@ func p(node Node, tree tp.Tree) {
 	case *parallel:
 		label = "Parallel"
 	case *decorator:
-		label = "Decorator"
+		v := node.(*decorator)
+		if v.fn != nil {
+			label = "Decorator"
+		} else {
+			label = "Label"
+		}
 	case *dynamic:
 		label = "Dynamic"
 	default:
