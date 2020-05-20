@@ -2,8 +2,13 @@ package littlealbert
 
 import (
 	"context"
-	"time"
+	"sync"
+	"sync/atomic"
+
+	"github.com/opentracing/opentracing-go/log"
 )
+
+const maxNodeConcurrency = 10
 
 // Result represents the result of a Node's execution
 // within the context of a Behavior Tree.
@@ -22,6 +27,21 @@ const (
 	// failed to complete its tasks successfully.
 	Failure
 )
+
+// String returns the canonical string representation of
+// the Result.
+func (r Result) String() string {
+	switch r {
+	case 1:
+		return "running"
+	case 2:
+		return "success"
+	case 3:
+		return "failure"
+	}
+
+	return "invalid"
+}
 
 // Node defines the minimum interface necessary to execute a Node
 // within the context of a Behavior Tree.
@@ -65,10 +85,23 @@ func (c conditional) Name() string {
 }
 
 func (c conditional) Tick(ctx context.Context) Result {
+	span, ctx := childSpanFromContext(ctx, c.name)
+	defer span.Finish()
+
+	span.LogFields(
+		log.String("node_type", "conditional"),
+	)
+
 	if c.cond(ctx) {
+		span.LogFields(
+			log.String("node_result", Success.String()),
+		)
 		return Success
 	}
 
+	span.LogFields(
+		log.String("node_result", Failure.String()),
+	)
 	return Failure
 }
 
@@ -93,7 +126,20 @@ func (t task) Name() string {
 // Tick turns the childless Task function into a valid
 // Behavior Tree Node.
 func (t task) Tick(ctx context.Context) Result {
-	return t.t(ctx)
+	span, ctx := childSpanFromContext(ctx, t.name)
+	defer span.Finish()
+
+	span.LogFields(
+		log.String("node_type", "task"),
+	)
+
+	result := t.t(ctx)
+
+	span.LogFields(
+		log.String("node_result", result.String()),
+	)
+
+	return result
 }
 
 // Sequence nodes route their execution ticks to their
@@ -116,11 +162,26 @@ func (s sequence) Children() []Node {
 }
 
 func (s sequence) Tick(ctx context.Context) Result {
+	span, ctx := childSpanFromContext(ctx, "sequence")
+	defer span.Finish()
+
+	span.LogFields(
+		log.String("node_type", "sequence"),
+	)
+
 	for _, node := range s.children {
 		if result := node.Tick(ctx); result != Success {
+			span.LogFields(
+				log.String("node_result", result.String()),
+			)
+
 			return result
 		}
 	}
+
+	span.LogFields(
+		log.String("node_result", Success.String()),
+	)
 
 	return Success
 }
@@ -145,11 +206,26 @@ func (f fallback) Children() []Node {
 }
 
 func (f fallback) Tick(ctx context.Context) Result {
+	span, ctx := childSpanFromContext(ctx, "fallback")
+	defer span.Finish()
+
+	span.LogFields(
+		log.String("node_type", "fallback"),
+	)
+
 	for _, node := range f.children {
 		if result := node.Tick(ctx); result == Success || result == Running {
+			span.LogFields(
+				log.String("node_result", result.String()),
+			)
+
 			return result
 		}
 	}
+
+	span.LogFields(
+		log.String("node_result", Failure.String()),
+	)
 
 	return Failure
 }
@@ -179,10 +255,26 @@ func (d decorator) Children() []Node {
 }
 
 func (d decorator) Tick(ctx context.Context) Result {
+	span, ctx := childSpanFromContext(ctx, d.name)
+	defer span.Finish()
+
+	span.LogFields(
+		log.String("node_type", "decorator"),
+	)
+
 	result := d.child.Tick(ctx)
+
+	span.LogFields(
+		log.String("wrapped_result", result.String()),
+	)
+
 	if d.fn != nil {
-		return d.fn(ctx, result)
+		result = d.fn(ctx, result)
 	}
+
+	span.LogFields(
+		log.String("node_result", result.String()),
+	)
 
 	return result
 }
@@ -196,35 +288,64 @@ func (d decorator) Tick(ctx context.Context) Result {
 func Parallel(threshold int, children ...Node) Node {
 	return &parallel{
 		children: children,
-		thresh:   threshold,
+		thresh:   uint64(threshold),
 	}
 }
 
 type parallel struct {
 	children []Node
-	thresh   int
+	thresh   uint64
 }
 
 func (p parallel) Children() []Node {
 	return p.children
 }
 
-func (p parallel) Tick(ctx context.Context) Result {
-	var successes, failures int
+func (p parallel) Tick(ctx context.Context) (res Result) {
+	var successes, failures uint64
+
+	span, ctx := childSpanFromContext(ctx, "parallel")
+	defer func() {
+		span.LogFields(
+			log.String("node_type", "parallel"),
+			log.String("node_result", res.String()),
+			log.Int("parallel_success_count", int(successes)),
+			log.Int("parallel_failure_count", int(failures)),
+		)
+		span.Finish()
+	}()
+
+	children := make(chan Node, len(p.children))
+
 	for _, node := range p.children {
-		switch result := node.Tick(ctx); result {
-		case Success:
-			successes++
-		case Failure:
-			failures++
-		}
+		children <- node
 	}
+
+	close(children)
+
+	var wg sync.WaitGroup
+	for i := 0; i < maxNodeConcurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for node := range children {
+				switch result := node.Tick(ctx); result {
+				case Success:
+					atomic.AddUint64(&successes, 1)
+				case Failure:
+					atomic.AddUint64(&failures, 1)
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
 
 	if successes >= p.thresh {
 		return Success
 	}
 
-	if failures >= (len(p.children) - p.thresh) {
+	if failures >= (uint64(len(p.children)) - p.thresh) {
 		return Failure
 	}
 
@@ -254,30 +375,24 @@ func (d dynamic) Children() []Node {
 	return []Node{d.cons(context.Background())}
 }
 
-func (d dynamic) Tick(ctx context.Context) Result {
-	return d.cons(ctx).Tick(ctx)
+func (d dynamic) construct(ctx context.Context) Node {
+	span, ctx := childSpanFromContext(ctx, d.name+"::constructor")
+	defer span.Finish()
+
+	span.LogFields(
+		log.String("dynamic_step", "constructor"),
+	)
+
+	return d.cons(ctx)
 }
 
-// Run executes the provided Behavior Tree at the provided Tick Rate with
-// the specified per-Tick timeout and provided parent context until a non-Running
-// Result is returned.
-func Run(ctx context.Context, tree Node, tickRate, tickTimeout time.Duration) Result {
-	for {
-		tickCtx, cancel := context.WithTimeout(ctx, tickRate)
+func (d dynamic) Tick(ctx context.Context) Result {
+	span, ctx := childSpanFromContext(ctx, d.name)
+	defer span.Finish()
 
-		result := tree.Tick(tickCtx)
+	span.LogFields(
+		log.String("node_type", "dynamic"),
+	)
 
-		cancel()
-
-		if result != Running {
-			return result
-		}
-
-		select {
-		case <-ctx.Done():
-			return Failure
-		case <-time.Tick(tickRate):
-			continue
-		}
-	}
+	return d.construct(ctx).Tick(ctx)
 }

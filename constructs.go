@@ -12,6 +12,23 @@ func Label(name string, node Node) Node {
 	return Decorator(name, node, nil)
 }
 
+// RunForever will always return a Running result unless the context
+// provided has been canceled in which case it will return the last received result.
+func RunForever(child Node) Node {
+	return Decorator(
+		"Run forever",
+		child,
+		func(ctx context.Context, result Result) Result {
+			select {
+			case <-ctx.Done():
+				return result
+			default:
+				return Running
+			}
+		},
+	)
+}
+
 // RunUntilSuccess will run the underlying child Node until it returns
 // a Successful Result effectively ignoring any Failures..
 func RunUntilSuccess(child Node) Node {
