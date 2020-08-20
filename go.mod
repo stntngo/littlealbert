@@ -1,4 +1,4 @@
-module littlealbert
+module github.com/stntngo/littlealbert
 
 go 1.14
 
